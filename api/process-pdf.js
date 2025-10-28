@@ -43,11 +43,12 @@ export default async function handler(req, res) {
     }
 
     // Prompt to extract shipping/invoice fields — strict English instructions and examples
+    // NOTE: field keys below use the exact capitalization / punctuation requested by the user
     const prompt = `
 You are an expert extractor of information from invoices and shipping documents.
 
 INSTRUCTIONS:
-1. Extract EXACTLY the fields listed below. If a field is not present in the DOCUMENT, set its value to null.
+1. Extract EXACTLY the fields listed below using the exact keys (capitalization and punctuation) shown. If a field is not present in the DOCUMENT, set its value to null.
 2. Dates must be formatted as YYYY-MM-DD. If no date is present, use null.
 3. For multi-value fields (e.g. container numbers), return an array of strings or null.
 4. Return ONLY a single valid JSON object and NOTHING else (no explanation, no markdown, no extra text).
@@ -55,109 +56,109 @@ INSTRUCTIONS:
 
 FIELDS TO RETURN (types):
 {
-  "hbl_number": "string or null",
-  "forwarder": "string or null",
-  "origin_country": "string or null",
-  "shipper_address": "string or null",
-  "destination_country": "string or null",
-  "delivery_address": "string or null",
-  "equipment_type": "string or null",
-  "consignee_name": "string or null",
-  "incoterms": "string or null",
-  "loading_port": "string or null",
-  "destination_port": "string or null",
-  "container_numbers": ["string", "..."] or null,
-  "delivery_status": "string or null"
+  "HBL#": "string or null",
+  "FWD": "string or null",
+  "Origin Country": "string or null",
+  "Shipper address": "string or null",
+  "Destination COuntry": "string or null",
+  "Delivery address": "string or null",
+  "Equipment type": "string or null",
+  "Consignee name": "string or null",
+  "INCO TERMS": "string or null",
+  "Loading": "string or null",
+  "destination": "string or null",
+  "Container#": ["string", "..."] or null,
+  "Delivery status": "string or null"
 }
 
 DOCUMENT:
 ${pdfText}
 
-EXAMPLES (five examples). Each example is a single JSON object exactly matching the fields above.
+EXAMPLES (five examples). Each example is a single JSON object exactly matching the fields above and using exact key capitalization.
 
 Example 1:
 {
-  "hbl_number": "PRGS002697",
-  "forwarder": "SGL",
-  "origin_country": "Czech Republic",
-  "shipper_address": "Pardubice",
-  "destination_country": "Canada",
-  "delivery_address": "Mississauga",
-  "equipment_type": "FCL",
-  "consignee_name": "ESAB Welding & Cutting Products CDN",
-  "incoterms": "Ex works",
-  "loading_port": "BREMERHAVEN, DE",
-  "destination_port": "Halifax, CA",
-  "container_numbers": ["MAGU5351379"],
-  "delivery_status": null
+  "HBL#": "PRGS002697",
+  "FWD": "SGL",
+  "Origin Country": "Czech Republic",
+  "Shipper address": "Pardubice",
+  "Destination COuntry": "Canada",
+  "Delivery address": "Mississauga",
+  "Equipment type": "FCL",
+  "Consignee name": "ESAB Welding & Cutting Products CDN",
+  "INCO TERMS": "Ex works",
+  "Loading": "BREMERHAVEN, DE",
+  "destination": "Halifax, CA",
+  "Container#": ["MAGU5351379"],
+  "Delivery status": null
 }
 
 Example 2:
 {
-  "hbl_number": "PRGSE001653",
-  "forwarder": "SGL",
-  "origin_country": "Czech Republic",
-  "shipper_address": "Helsingborg",
-  "destination_country": "Canada",
-  "delivery_address": "Mississauga",
-  "equipment_type": "FCL",
-  "consignee_name": "ESAB Welding & Cutting Products CDN",
-  "incoterms": "Ex works",
-  "loading_port": "BREMERHAVEN, DE",
-  "destination_port": "Montreal, CA",
-  "container_numbers": ["BEAU4085003","ECMU7740829","TCNU5804373"],
-  "delivery_status": null
+  "HBL#": "PRGSE001653",
+  "FWD": "SGL",
+  "Origin Country": "Czech Republic",
+  "Shipper address": "Helsingborg",
+  "Destination COuntry": "Canada",
+  "Delivery address": "Mississauga",
+  "Equipment type": "FCL",
+  "Consignee name": "ESAB Welding & Cutting Products CDN",
+  "INCO TERMS": "Ex works",
+  "Loading": "BREMERHAVEN, DE",
+  "destination": "Montreal, CA",
+  "Container#": ["BEAU4085003","ECMU7740829","TCNU5804373"],
+  "Delivery status": null
 }
 
 Example 3:
 {
-  "hbl_number": "HLCUPRG250804830",
-  "forwarder": "SGL",
-  "origin_country": "Czech Republic",
-  "shipper_address": "Helsingborg",
-  "destination_country": "Canada",
-  "delivery_address": "Mississauga",
-  "equipment_type": "FCL",
-  "consignee_name": "ESAB GROUP CANADA INC",
-  "incoterms": null,
-  "loading_port": "Helsingborg",
-  "destination_port": "Montreal",
-  "container_numbers": ["FTAU1547667"],
-  "delivery_status": null
+  "HBL#": "HLCUPRG250804830",
+  "FWD": "SGL",
+  "Origin Country": "Czech Republic",
+  "Shipper address": "Helsingborg",
+  "Destination COuntry": "Canada",
+  "Delivery address": "Mississauga",
+  "Equipment type": "FCL",
+  "Consignee name": "ESAB GROUP CANADA INC",
+  "INCO TERMS": null,
+  "Loading": "Helsingborg",
+  "destination": "Montreal",
+  "Container#": ["FTAU1547667"],
+  "Delivery status": null
 }
 
 Example 4:
 {
-  "hbl_number": "HLCUPRG250808205",
-  "forwarder": "SGL",
-  "origin_country": "Czech Republic",
-  "shipper_address": "Helsingborg",
-  "destination_country": "Canada",
-  "delivery_address": "Mississauga",
-  "equipment_type": "FCL",
-  "consignee_name": "ESAB GROUP CANADA INC",
-  "incoterms": null,
-  "loading_port": "Helsingborg",
-  "destination_port": "Montreal",
-  "container_numbers": ["TCKU3947468"],
-  "delivery_status": null
+  "HBL#": "HLCUPRG250808205",
+  "FWD": "SGL",
+  "Origin Country": "Czech Republic",
+  "Shipper address": "Helsingborg",
+  "Destination COuntry": "Canada",
+  "Delivery address": "Mississauga",
+  "Equipment type": "FCL",
+  "Consignee name": "ESAB GROUP CANADA INC",
+  "INCO TERMS": null,
+  "Loading": "Helsingborg",
+  "destination": "Montreal",
+  "Container#": ["TCKU3947468"],
+  "Delivery status": null
 }
 
 Example 5:
 {
-  "hbl_number": null,
-  "forwarder": "SGL",
-  "origin_country": "Czech Republic",
-  "shipper_address": "Helsingborg",
-  "destination_country": "Canada",
-  "delivery_address": "Mississauga",
-  "equipment_type": "FCL",
-  "consignee_name": "ESAB GROUP CANADA INC",
-  "incoterms": null,
-  "loading_port": "Helsingborg",
-  "destination_port": "Montreal",
-  "container_numbers": ["UACU3695573"],
-  "delivery_status": null
+  "HBL#": null,
+  "FWD": "SGL",
+  "Origin Country": "Czech Republic",
+  "Shipper address": "Helsingborg",
+  "Destination COuntry": "Canada",
+  "Delivery address": "Mississauga",
+  "Equipment type": "FCL",
+  "Consignee name": "ESAB GROUP CANADA INC",
+  "INCO TERMS": null,
+  "Loading": "Helsingborg",
+  "destination": "Montreal",
+  "Container#": ["UACU3695573"],
+  "Delivery status": null
 }
 
 JSON:`;
