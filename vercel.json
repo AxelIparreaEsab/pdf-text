@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/process-pdf.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/process-pdf",
+      "dest": "/api/process-pdf.js"
+    }
+  ],
+  "functions": {
+    "api/process-pdf.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
+}
