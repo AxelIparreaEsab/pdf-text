@@ -85,3 +85,4 @@ ${pdfText}
     return res.status(500).json({ success: false, message: 'Error processing PDF', error: error.message });
   }
 }
+''
