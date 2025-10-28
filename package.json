@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
-    "formidable": "^3.5.4"
+    "formidable": "^3.5.4",
+    "fs": "0.0.1-security"
   }
 }
