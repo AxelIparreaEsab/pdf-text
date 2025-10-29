@@ -108,7 +108,7 @@ FIELDS TO RETURN (types):
 DOCUMENT:
 ${pdfText}
 `;
-        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-1.5-flash' });
+        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' });
         const result = await model.generateContent(prompt);
         let jsonText = result.response.text().trim();
         if (jsonText.startsWith('```json')) jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
