@@ -11,6 +11,30 @@ export const config = {
   },
 };
 
+// Helpers to send JSON/status that work both with Next/Express-style `res` and
+// with Node's native http.ServerResponse (used by server.js).
+function sendJson(res, statusCode, payload) {
+  try {
+    if (res && typeof res.status === 'function' && typeof res.json === 'function') {
+      return res.status(statusCode).json(payload);
+    }
+  } catch (e) {
+    // fall through to native write
+  }
+  // Fallback for Node's http.ServerResponse
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+  res.end(body);
+}
+
+function sendStatus(res, statusCode) {
+  try {
+    if (res && typeof res.status === 'function') return res.status(statusCode).end();
+  } catch (e) {}
+  res.writeHead(statusCode);
+  res.end();
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -18,7 +42,7 @@ export default async function handler(req, res) {
   // Ensure responses are returned as JSON (Power Automate expects application/json)
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') return sendStatus(res, 200);
 
   if (req.method === 'POST') {
   const contentType = (req.headers['content-type'] || '').toLowerCase();
@@ -38,7 +62,7 @@ export default async function handler(req, res) {
       try {
         body = JSON.parse(raw || '{}');
       } catch (err) {
-        return res.status(400).json({ success: false, message: 'Invalid JSON body' });
+        return sendJson(res, 400, { success: false, message: 'Invalid JSON body' });
       }
 
       if (body.fileContent) {
@@ -47,10 +71,10 @@ export default async function handler(req, res) {
           fileName = body.fileName || fileName;
           callbackUrl = body.callbackUrl || null;
         } catch (err) {
-          return res.status(400).json({ success: false, message: 'Invalid base64 in fileContent' });
+          return sendJson(res, 400, { success: false, message: 'Invalid base64 in fileContent' });
         }
       } else {
-        return res.status(400).json({ success: false, message: 'JSON body must include fileContent' });
+        return sendJson(res, 400, { success: false, message: 'JSON body must include fileContent' });
       }
     }
 
@@ -66,11 +90,11 @@ export default async function handler(req, res) {
       fileName = fields.fileName || fileName;
       callbackUrl = fields.callbackUrl || callbackUrl;
       const file = files.file;
-      if (!file) return res.status(400).json({ success: false, message: 'file is required' });
+  if (!file) return sendJson(res, 400, { success: false, message: 'file is required' });
       pdfBuffer = await fs.promises.readFile(file.filepath);
     }
 
-    if (!pdfBuffer) return res.status(400).json({ success: false, message: 'No file provided' });
+  if (!pdfBuffer) return sendJson(res, 400, { success: false, message: 'No file provided' });
 
   const jobId = Date.now().toString();
   jobs[jobId] = { status: 'pending', callbackUrl: callbackUrl || null };
@@ -167,17 +191,33 @@ ${pdfText}
       }
     })();
 
-    return res.status(200).json({ success: true, jobId });
+  return sendJson(res, 200, { success: true, jobId });
   }
 
   else if (req.method === 'GET') {
     const params = new URL(req.url, `http://${req.headers.host}`).searchParams;
     const jobId = params.get('jobId');
-    if (!jobId || !jobs[jobId]) return res.status(404).json({ success: false, message: 'Job not found' });
-    return res.status(200).json(jobs[jobId]);
+
+    // If jobId is missing, return a clear 400 JSON response
+    if (!jobId) {
+      return sendJson(res, 400, { success: false, message: 'jobId query parameter is required' });
+    }
+
+    // If job not found yet, return a 200 with a consistent JSON shape indicating pending
+    if (!jobs[jobId]) {
+      return sendJson(res, 200, {
+        status: 'pending',
+        jobId,
+        fileName: null,
+        data: null
+      });
+    }
+
+    // Job exists: return the stored job object
+    return sendJson(res, 200, jobs[jobId]);
   }
 
   else {
-    return res.status(405).json({ success: false, message: 'Method not allowed' });
+    return sendJson(res, 405, { success: false, message: 'Method not allowed' });
   }
 }
