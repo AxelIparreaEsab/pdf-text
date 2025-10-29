@@ -15,13 +15,16 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // Ensure responses are returned as JSON (Power Automate expects application/json)
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (req.method === 'POST') {
-    const contentType = (req.headers['content-type'] || '').toLowerCase();
-    let pdfBuffer = null;
-    let fileName = 'unknown';
+  const contentType = (req.headers['content-type'] || '').toLowerCase();
+  let pdfBuffer = null;
+  let fileName = 'unknown';
+  let callbackUrl = null; // optional webhook (Power Automate)
 
     if (contentType.includes('application/json')) {
       const raw = await new Promise((resolve, reject) => {
@@ -42,6 +45,7 @@ export default async function handler(req, res) {
         try {
           pdfBuffer = Buffer.from(body.fileContent, 'base64');
           fileName = body.fileName || fileName;
+          callbackUrl = body.callbackUrl || null;
         } catch (err) {
           return res.status(400).json({ success: false, message: 'Invalid base64 in fileContent' });
         }
@@ -60,6 +64,7 @@ export default async function handler(req, res) {
       });
       const { fields, files } = parsed;
       fileName = fields.fileName || fileName;
+      callbackUrl = fields.callbackUrl || callbackUrl;
       const file = files.file;
       if (!file) return res.status(400).json({ success: false, message: 'file is required' });
       pdfBuffer = await fs.promises.readFile(file.filepath);
@@ -67,8 +72,8 @@ export default async function handler(req, res) {
 
     if (!pdfBuffer) return res.status(400).json({ success: false, message: 'No file provided' });
 
-    const jobId = Date.now().toString();
-    jobs[jobId] = { status: 'pending' };
+  const jobId = Date.now().toString();
+  jobs[jobId] = { status: 'pending', callbackUrl: callbackUrl || null };
 
     (async () => {
       try {
@@ -116,8 +121,49 @@ ${pdfText}
           fileName: fileName || 'unknown',
           processedAt: new Date().toISOString()
         };
+
+        // If a callback URL was provided, POST the JSON result to that URL
+        try {
+          if (jobs[jobId].callbackUrl) {
+            const payload = {
+              success: true,
+              jobId,
+              fileName: jobs[jobId].fileName,
+              data: jobs[jobId].data,
+              processedAt: jobs[jobId].processedAt
+            };
+            await fetch(jobs[jobId].callbackUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            jobs[jobId].callbackSent = true;
+          }
+        } catch (cbErr) {
+          // Log callback error but don't crash the job
+          jobs[jobId].callbackError = cbErr.message || String(cbErr);
+        }
       } catch (err) {
         jobs[jobId] = { status: 'error', message: err.message };
+        // If a callback URL was provided, POST the error JSON to that URL
+        try {
+          if (jobs[jobId].callbackUrl) {
+            const payload = {
+              success: false,
+              jobId,
+              fileName: fileName || 'unknown',
+              message: err.message
+            };
+            await fetch(jobs[jobId].callbackUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            jobs[jobId].callbackSent = true;
+          }
+        } catch (cbErr) {
+          jobs[jobId].callbackError = cbErr.message || String(cbErr);
+        }
       }
     })();
 
