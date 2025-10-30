@@ -19,11 +19,11 @@ export async function extractTextFromPDF(pdfBuffer) {
     throw new Error('extractTextFromPDF: a valid PDF Buffer is required');
   }
 
-  // ESM-only dynamic import of pdf-parse
+  // Dynamic import for CommonJS module pdf-parse
   let pdfParse;
   try {
     const mod = await import('pdf-parse');
-    pdfParse = mod.default || mod;  // Ensure we have the function
+    pdfParse = mod.default || mod; // ensures the function
   } catch (err) {
     throw new Error(
       `pdf-parse module is not available. Install it with: npm install pdf-parse\nError: ${err.message}`
@@ -31,9 +31,9 @@ export async function extractTextFromPDF(pdfBuffer) {
   }
 
   try {
-    // Extract text
+    // Extract text from PDF
     const data = await pdfParse(pdfBuffer);
-    const text = data?.text || data?.content || '';
+    const text = data?.text || '';
 
     // Optional debug output for Render
     try {

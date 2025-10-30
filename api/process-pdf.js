@@ -1,67 +1,53 @@
 /**
  * process-pdf.js
  * 
- * Serverless endpoint to process PDF files:
- * - Accepts PDF via JSON (base64) or multipart/form-data
- * - Extracts text using pdf-parse (extractTextFromPDF)
- * - Processes text via Google Gemini AI (processWithGemini)
- * - Supports async job tracking and optional callback URL
+ * Main API route to receive PDFs, extract text, process with Gemini AI, 
+ * and optionally send callback to external URL.
  */
 
 import formidable from 'formidable';
 import fs from 'fs/promises';
-import { extractTextFromPDF } from './pdf-processing/text.js';
+import { extractTextFromPDF } from './pdf-processing/extractTextFromPDF.js';
 import { processWithGemini } from './AI/AiController.js';
 
-// In-memory job storage (for GET status)
+// Optional in-memory jobs store
 const jobs = {};
 
-// Disable default body parser for file handling
-export const config = {
-  api: { bodyParser: false }
-};
+export const config = { api: { bodyParser: false } };
 
 /**
- * Helper to send JSON response in Node.js environments
- * Works for Serverless platforms like Render (no Express res.status())
+ * Send JSON response (fallback for non-Express)
  */
 function sendJson(res, statusCode, payload) {
+  if (res?.status && typeof res.json === 'function') {
+    return res.status(statusCode).json(payload);
+  }
   const body = JSON.stringify(payload);
-  res.writeHead(statusCode, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body)
-  });
+  res.writeHead(statusCode, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 }
 
 /**
- * Main handler
+ * API Handler
  */
 export default async function handler(req, res) {
-  // Set CORS headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-  // Preflight request
   if (req.method === 'OPTIONS') return sendJson(res, 200, {});
 
-  // ===========================
-  // GET: Check job status
-  // ===========================
+  // GET: check job status
   if (req.method === 'GET') {
     const params = new URL(req.url, `http://${req.headers.host}`).searchParams;
     const jobId = params.get('jobId');
-
-    if (!jobId) return sendJson(res, 400, { success: false, message: 'jobId query parameter required' });
-
-    const job = jobs[jobId] || { status: 'pending', jobId };
-    return sendJson(res, 200, job);
+    if (!jobId) return sendJson(res, 400, { success: false, message: 'jobId required' });
+    return sendJson(res, 200, jobs[jobId] || { status: 'pending', jobId });
   }
 
-  // ===========================
-  // POST: Process PDF
-  // ===========================
+  // POST: receive and process PDF
   if (req.method === 'POST') {
     let pdfBuffer = null;
     let fileName = 'unknown';
@@ -69,58 +55,44 @@ export default async function handler(req, res) {
 
     const contentType = (req.headers['content-type'] || '').toLowerCase();
 
-    try {
-      // JSON base64 payload
-      if (contentType.includes('application/json')) {
-        const raw = await new Promise((resolve, reject) => {
-          let data = '';
-          req.on('data', chunk => (data += chunk));
-          req.on('end', () => resolve(data));
-          req.on('error', reject);
-        });
+    if (contentType.includes('application/json')) {
+      const raw = await new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', chunk => (data += chunk));
+        req.on('end', () => resolve(data));
+        req.on('error', reject);
+      });
+      const body = JSON.parse(raw || '{}');
+      if (!body.fileContent) return sendJson(res, 400, { success: false, message: 'fileContent required' });
+      pdfBuffer = Buffer.from(body.fileContent, 'base64');
+      fileName = body.fileName || fileName;
+      callbackUrl = body.callbackUrl || null;
 
-        const body = JSON.parse(raw || '{}');
-        if (!body.fileContent) return sendJson(res, 400, { success: false, message: 'fileContent required' });
+    } else if (contentType.includes('multipart/form-data')) {
+      const form = new formidable.IncomingForm();
+      const { fields, files } = await new Promise((resolve, reject) =>
+        form.parse(req, (err, f, fs) => (err ? reject(err) : resolve({ fields: f, files: fs })))
+      );
+      if (!files.file) return sendJson(res, 400, { success: false, message: 'File is required' });
+      pdfBuffer = await fs.promises.readFile(files.file.filepath);
+      fileName = fields.fileName || fileName;
+      callbackUrl = fields.callbackUrl || null;
 
-        pdfBuffer = Buffer.from(body.fileContent, 'base64');
-        fileName = body.fileName || fileName;
-        callbackUrl = body.callbackUrl || null;
-      }
-      // Multipart/form-data upload
-      else if (contentType.includes('multipart/form-data')) {
-        const form = new formidable.IncomingForm();
-        const { fields, files } = await new Promise((resolve, reject) =>
-          form.parse(req, (err, f, fsFiles) => (err ? reject(err) : resolve({ fields: f, files: fsFiles })))
-        );
-
-        if (!files.file) return sendJson(res, 400, { success: false, message: 'File is required' });
-        pdfBuffer = await fs.readFile(files.file.filepath);
-        fileName = fields.fileName || fileName;
-        callbackUrl = fields.callbackUrl || null;
-      } else {
-        return sendJson(res, 400, { success: false, message: 'Unsupported content-type' });
-      }
-    } catch (err) {
-      return sendJson(res, 400, { success: false, message: 'Invalid request payload', error: err.message });
+    } else {
+      return sendJson(res, 400, { success: false, message: 'Unsupported content-type' });
     }
 
-    // Assign job ID and mark as pending
     const jobId = Date.now().toString();
     jobs[jobId] = { status: 'pending', fileName, callbackUrl };
 
-    // Process asynchronously
+    // Async processing
     (async () => {
       try {
-        // Extract text from PDF
         const extractedText = await extractTextFromPDF(pdfBuffer);
-
-        // Process with AI
         const result = await processWithGemini(extractedText, fileName);
-
-        // Save result in job
         jobs[jobId] = { ...result };
 
-        // Optional callback to external URL
+        // Send callback if provided
         if (callbackUrl) {
           try {
             await fetch(callbackUrl, {
@@ -129,8 +101,8 @@ export default async function handler(req, res) {
               body: JSON.stringify(result)
             });
             jobs[jobId].callbackSent = true;
-          } catch (cbErr) {
-            jobs[jobId].callbackError = cbErr.message;
+          } catch (err) {
+            jobs[jobId].callbackError = err.message;
           }
         }
       } catch (err) {
@@ -138,12 +110,8 @@ export default async function handler(req, res) {
       }
     })();
 
-    // Return immediately with job ID
     return sendJson(res, 200, { success: true, jobId });
   }
 
-  // ===========================
-  // Method not allowed
-  // ===========================
   return sendJson(res, 405, { success: false, message: 'Method not allowed' });
 }
