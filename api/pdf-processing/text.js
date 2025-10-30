@@ -10,23 +10,30 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Create require function for CommonJS modules
+const require = createRequire(import.meta.url);
 
 export async function extractTextFromPDF(pdfBuffer) {
   if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer)) {
     throw new Error('extractTextFromPDF: a valid PDF Buffer is required');
   }
 
-  // Dynamic import for CommonJS module pdf-parse
   let pdfParse;
   try {
-    const mod = await import('pdf-parse');
-    pdfParse = mod.default || mod; // ensures the function
+    // Use require for CommonJS module
+    pdfParse = require('pdf-parse');
+    
+    if (typeof pdfParse !== 'function') {
+      throw new Error('pdf-parse did not export a function');
+    }
   } catch (err) {
     throw new Error(
-      `pdf-parse module is not available. Install it with: npm install pdf-parse\nError: ${err.message}`
+      `pdf-parse module is not available or not properly installed.\nError: ${err.message}`
     );
   }
 
