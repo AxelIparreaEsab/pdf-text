@@ -1,6 +1,7 @@
 import formidable from 'formidable';
 import fs from 'fs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import path from 'path';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const jobs = {};
@@ -119,7 +120,7 @@ FIELDS TO RETURN (types):
   "FWD": "string or null",
   "Origin Country": "string or null",
   "Shipper address": "string or null",
-  "Destination COuntry": "string or null",
+  "Destination Country": "string or null",
   "Delivery address": "string or null",
   "Equipment type": "string or null",
   "Consignee name": "string or null",
@@ -135,9 +136,24 @@ ${pdfText}
         const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' });
         const result = await model.generateContent(prompt);
         let jsonText = result.response.text().trim();
+        // ensure outputs directory exists and save raw response for debugging
+        try {
+          const outDir = path.join(process.cwd(), 'outputs');
+          await fs.promises.mkdir(outDir, { recursive: true });
+          await fs.promises.writeFile(path.join(outDir, `${jobId}-raw.txt`), jsonText, 'utf8');
+        } catch (writeErr) {
+          console.error('Failed to write raw output file:', writeErr);
+        }
         if (jsonText.startsWith('```json')) jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
         if (jsonText.startsWith('```')) jsonText = jsonText.replace(/```\n?/g, '');
         const extractedData = JSON.parse(jsonText);
+        // persist parsed JSON result for debugging/record
+        try {
+          const outDir = path.join(process.cwd(), 'outputs');
+          await fs.promises.writeFile(path.join(outDir, `${jobId}.json`), JSON.stringify(extractedData, null, 2), 'utf8');
+        } catch (writeErr) {
+          console.error('Failed to write parsed output file:', writeErr);
+        }
 
         jobs[jobId] = {
           status: 'done',
@@ -169,6 +185,15 @@ ${pdfText}
         }
       } catch (err) {
         jobs[jobId] = { status: 'error', message: err.message };
+        // Save error details to outputs for easier debugging
+        try {
+          const outDir = path.join(process.cwd(), 'outputs');
+          await fs.promises.mkdir(outDir, { recursive: true });
+          const errObj = { message: err.message, stack: err.stack };
+          await fs.promises.writeFile(path.join(outDir, `${jobId}-error.json`), JSON.stringify(errObj, null, 2), 'utf8');
+        } catch (writeErr) {
+          console.error('Failed to write error output file:', writeErr);
+        }
         // If a callback URL was provided, POST the error JSON to that URL
         try {
           if (jobs[jobId].callbackUrl) {
