@@ -1,7 +1,7 @@
 import formidable from 'formidable';
 import fs from 'fs/promises';
-import { extractTextFromPDF } from '../text.js';
-import { processWithGemini } from '../AI/controller.js';
+import { extractTextFromPDF } from '../pdf-processing/text.js';
+import { processWithGemini } from './AI/AiController.js';
 
 // Jobs en memoria opcional (para GET status)
 const jobs = {};
