@@ -1,117 +1,103 @@
-/**
- * process-pdf.js
- * 
- * Main API route to receive PDFs, extract text, process with Gemini AI, 
- * and optionally send callback to external URL.
- */
-
-import formidable from 'formidable';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs/promises';
-import { extractTextFromPDF } from './pdf-processing/extractTextFromPDF.js';
-import { processWithGemini } from './AI/AiController.js';
+import path from 'path';
 
-// Optional in-memory jobs store
-const jobs = {};
-
-export const config = { api: { bodyParser: false } };
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
- * Send JSON response (fallback for non-Express)
+ * Procesa texto extraído con Gemini AI
+ * @param {string} extractedText - Texto extraído del PDF
+ * @param {string} fileName - Nombre del archivo para logging
+ * @returns {Promise<Object>} Datos extraídos estructurados
  */
-function sendJson(res, statusCode, payload) {
-  if (res?.status && typeof res.json === 'function') {
-    return res.status(statusCode).json(payload);
+export async function processWithGemini(extractedText, fileName) {
+  const jobId = Date.now().toString();
+  
+  try {
+    const prompt = `
+You are an expert extractor of information from invoices and shipping documents.
+INSTRUCTIONS:
+1. Extract EXACTLY the fields listed below using the exact keys (capitalization and punctuation) shown. If a field is not present in the DOCUMENT, set its value to null.
+2. Dates must be formatted as YYYY-MM-DD. If no date is present, use null.
+3. For multi-value fields (e.g. container numbers), return an array of strings or null.
+4. Return ONLY a single valid JSON object and NOTHING else.
+5. Do NOT hallucinate: use only information present in the DOCUMENT.
+6. You are not allowed to answer outside of the JSON object.
+7. Ensure the JSON is syntactically valid.
+8. The Document may have errors or not valid information, extract only what is clearly present. Else return null for that field.
+
+FIELDS TO RETURN (types):
+{
+  "HBL#": "string or null",
+  "FWD": "string or null",
+  "Origin Country": "string or null",
+  "Shipper address": "string or null",
+  "Destination Country": "string or null",
+  "Delivery address": "string or null",
+  "Equipment type": "string or null",
+  "Consignee name": "string or null",
+  "INCO TERMS": "string or null",
+  "Loading": "string or null",
+  "destination": "string or null",
+  "Container#": ["string", "..."] or null,
+  "Delivery status": "string or null"
+}
+
+DOCUMENT:
+${extractedText}
+`;
+
+    const model = genAI.getGenerativeModel({ 
+      model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' 
+    });
+    
+    const result = await model.generateContent(prompt);
+    let jsonText = result.response.text().trim();
+
+    // Guardar respuesta raw para debugging
+    await saveDebugFile(`${jobId}-raw.txt`, jsonText);
+
+    // Limpiar markdown code blocks
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    }
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/```\n?/g, '');
+    }
+
+    const extractedData = JSON.parse(jsonText);
+
+    // Guardar resultado parseado
+    await saveDebugFile(`${jobId}.json`, JSON.stringify(extractedData, null, 2));
+
+    return {
+      success: true,
+      jobId,
+      fileName,
+      data: extractedData,
+      processedAt: new Date().toISOString()
+    };
+
+  } catch (err) {
+    // Guardar error para debugging
+    await saveDebugFile(`${jobId}-error.json`, JSON.stringify({
+      message: err.message,
+      stack: err.stack
+    }, null, 2));
+
+    throw new Error(`Gemini processing failed: ${err.message}`);
   }
-  const body = JSON.stringify(payload);
-  res.writeHead(statusCode, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
-  res.end(body);
 }
 
 /**
- * API Handler
+ * Guarda archivos de debug en la carpeta outputs
  */
-export default async function handler(req, res) {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-
-  if (req.method === 'OPTIONS') return sendJson(res, 200, {});
-
-  // GET: check job status
-  if (req.method === 'GET') {
-    const params = new URL(req.url, `http://${req.headers.host}`).searchParams;
-    const jobId = params.get('jobId');
-    if (!jobId) return sendJson(res, 400, { success: false, message: 'jobId required' });
-    return sendJson(res, 200, jobs[jobId] || { status: 'pending', jobId });
+async function saveDebugFile(filename, content) {
+  try {
+    const outDir = path.join(process.cwd(), 'outputs');
+    await fs.mkdir(outDir, { recursive: true });
+    await fs.writeFile(path.join(outDir, filename), content, 'utf8');
+  } catch (err) {
+    console.error('Failed to write debug file:', err);
   }
-
-  // POST: receive and process PDF
-  if (req.method === 'POST') {
-    let pdfBuffer = null;
-    let fileName = 'unknown';
-    let callbackUrl = null;
-
-    const contentType = (req.headers['content-type'] || '').toLowerCase();
-
-    if (contentType.includes('application/json')) {
-      const raw = await new Promise((resolve, reject) => {
-        let data = '';
-        req.on('data', chunk => (data += chunk));
-        req.on('end', () => resolve(data));
-        req.on('error', reject);
-      });
-      const body = JSON.parse(raw || '{}');
-      if (!body.fileContent) return sendJson(res, 400, { success: false, message: 'fileContent required' });
-      pdfBuffer = Buffer.from(body.fileContent, 'base64');
-      fileName = body.fileName || fileName;
-      callbackUrl = body.callbackUrl || null;
-
-    } else if (contentType.includes('multipart/form-data')) {
-      const form = new formidable.IncomingForm();
-      const { fields, files } = await new Promise((resolve, reject) =>
-        form.parse(req, (err, f, fs) => (err ? reject(err) : resolve({ fields: f, files: fs })))
-      );
-      if (!files.file) return sendJson(res, 400, { success: false, message: 'File is required' });
-      pdfBuffer = await fs.promises.readFile(files.file.filepath);
-      fileName = fields.fileName || fileName;
-      callbackUrl = fields.callbackUrl || null;
-
-    } else {
-      return sendJson(res, 400, { success: false, message: 'Unsupported content-type' });
-    }
-
-    const jobId = Date.now().toString();
-    jobs[jobId] = { status: 'pending', fileName, callbackUrl };
-
-    // Async processing
-    (async () => {
-      try {
-        const extractedText = await extractTextFromPDF(pdfBuffer);
-        const result = await processWithGemini(extractedText, fileName);
-        jobs[jobId] = { ...result };
-
-        // Send callback if provided
-        if (callbackUrl) {
-          try {
-            await fetch(callbackUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(result)
-            });
-            jobs[jobId].callbackSent = true;
-          } catch (err) {
-            jobs[jobId].callbackError = err.message;
-          }
-        }
-      } catch (err) {
-        jobs[jobId] = { status: 'error', message: err.message };
-      }
-    })();
-
-    return sendJson(res, 200, { success: true, jobId });
-  }
-
-  return sendJson(res, 405, { success: false, message: 'Method not allowed' });
 }
