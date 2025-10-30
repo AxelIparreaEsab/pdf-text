@@ -7,7 +7,7 @@
 
 import formidable from 'formidable';
 import fs from 'fs/promises';
-import { extractTextFromPDF } from './pdf-processing/extractTextFromPDF.js';
+import { extractTextFromPDF } from './pdf-processing/text.js';
 import { processWithGemini } from './AI/AiController.js';
 
 // Optional in-memory jobs store
