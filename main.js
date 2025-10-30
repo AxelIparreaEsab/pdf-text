@@ -1,8 +1,8 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { extractTextFromPDF } from './pdf-processing/text.js';
-import { extractImagesFromPDF } from './pdf-processing/image.js';
+import { extractTextFromPDF } from './api/pdf-processing/text.js';
+import { extractImagesFromPDF } from './api/pdf-processing/image.js';
 import { handler } from './api/process-pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
