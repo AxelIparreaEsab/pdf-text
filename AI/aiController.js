@@ -1,196 +1,103 @@
-import { STATUS_CODES, MESSAGES } from '../config/constants.js';
-import { processWithAI, analyzeData, generatePrediction } from '../services/aiService.js';
-import { processAIQuery } from './MODELAI/AI-DB.js';
-import { getPerformanceMetrics, getLearningInsights } from './MODELAI/AIReward.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import fs from 'fs/promises';
+import path from 'path';
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
- * Process natural language database query with AI
+ * Procesa texto extraído con Gemini AI
+ * @param {string} extractedText - Texto extraído del PDF
+ * @param {string} fileName - Nombre del archivo para logging
+ * @returns {Promise<Object>} Datos extraídos estructurados
  */
-export const queryDatabase = async (req, res) => {
+export async function processWithGemini(extractedText, fileName) {
+  const jobId = Date.now().toString();
+  
   try {
-    const { query, conversationHistory = [], feedback = null } = req.body;
+    const prompt = `
+You are an expert extractor of information from invoices and shipping documents.
+INSTRUCTIONS:
+1. Extract EXACTLY the fields listed below using the exact keys (capitalization and punctuation) shown. If a field is not present in the DOCUMENT, set its value to null.
+2. Dates must be formatted as YYYY-MM-DD. If no date is present, use null.
+3. For multi-value fields (e.g. container numbers), return an array of strings or null.
+4. Return ONLY a single valid JSON object and NOTHING else.
+5. Do NOT hallucinate: use only information present in the DOCUMENT.
+6. You are not allowed to answer outside of the JSON object.
+7. Ensure the JSON is syntactically valid.
+8. The Document may have errors or not valid information, extract only what is clearly present. Else return null for that field.
 
-    if (!query) {
-      return res.status(STATUS_CODES.BAD_REQUEST).json({
-        success: false,
-        message: 'Query is required',
-      });
-    }
+FIELDS TO RETURN (types):
+{
+  "HBL#": "string or null",
+  "FWD": "string or null",
+  "Origin Country": "string or null",
+  "Shipper address": "string or null",
+  "Destination Country": "string or null",
+  "Delivery address": "string or null",
+  "Equipment type": "string or null",
+  "Consignee name": "string or null",
+  "INCO TERMS": "string or null",
+  "Loading": "string or null",
+  "destination": "string or null",
+  "Container#": ["string", "..."] or null,
+  "Delivery status": "string or null"
+}
 
-    // Lightweight small-talk handler (non-intrusive)
-    const qLower = String(query).trim().toLowerCase();
-    const isGreeting = /^(hi|hello|hey|hola|buenas|good\s*morn|good\s*afternoon|good\s*evening)\b/.test(qLower);
-    const asksFunction = /(what\s*(can|do)\s*you\s*do|how\s*do\s*you\s*help|cual\s*es\s*tu\s*función|para\s*qué\s*sirves)/i.test(query);
-    if (isGreeting || asksFunction) {
-      const reply = asksFunction
-        ? 'Hi! I can understand natural language questions about your airline inventory and generate safe SQL to fetch data. I can also draft actions like purchase orders and ask for your confirmation before executing.'
-        : 'Hello! How can I help you with inventory, flights, trolleys, or orders?';
-      return res.status(STATUS_CODES.SUCCESS).json({ success: true, message: reply, data: { action: 'small_talk' } });
-    }
+DOCUMENT:
+${extractedText}
+`;
 
-    // Verificar si la API key está configurada
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(503).json({
-        success: false,
-        message: 'AI service not configured. Please set GEMINI_API_KEY in environment variables.',
-        error: 'GEMINI_API_KEY not configured',
-      });
-    }
-
-    const result = await processAIQuery(query, conversationHistory, feedback);
-
-    res.status(STATUS_CODES.SUCCESS).json({
-      success: true,
-      message: 'Query processed successfully',
-      data: result,
+    const model = genAI.getGenerativeModel({ 
+      model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' 
     });
-  } catch (error) {
-    console.error('Error processing AI query:', error);
     
-    // Manejar específicamente errores de API key inválida
-    if (error.message.includes('API_KEY_INVALID') || 
-        error.message.includes('API key not valid') ||
-        error.message.includes('not found for API version') ||
-        error.message.includes('is not supported')) {
-      return res.status(503).json({
-        success: false,
-        message: 'Google Gemini API error. The model may not be available or the API key is invalid.',
-        error: error.message,
-        suggestion: 'Try updating GEMINI_MODEL to "gemini-pro" in your .env file and restart the server.',
-      });
+    const result = await model.generateContent(prompt);
+    let jsonText = result.response.text().trim();
+
+    // Guardar respuesta raw para debugging
+    await saveDebugFile(`${jobId}-raw.txt`, jsonText);
+
+    // Limpiar markdown code blocks
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    }
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/```\n?/g, '');
     }
 
-    res.status(STATUS_CODES.INTERNAL_ERROR).json({
-      success: false,
-      message: 'Error processing AI query',
-      error: error.message,
-    });
+    const extractedData = JSON.parse(jsonText);
+
+    // Guardar resultado parseado
+    await saveDebugFile(`${jobId}.json`, JSON.stringify(extractedData, null, 2));
+
+    return {
+      success: true,
+      jobId,
+      fileName,
+      data: extractedData,
+      processedAt: new Date().toISOString()
+    };
+
+  } catch (err) {
+    // Guardar error para debugging
+    await saveDebugFile(`${jobId}-error.json`, JSON.stringify({
+      message: err.message,
+      stack: err.stack
+    }, null, 2));
+
+    throw new Error(`Gemini processing failed: ${err.message}`);
   }
-};
+}
 
 /**
- * Get AI performance metrics and learning insights
+ * Guarda archivos de debug en la carpeta outputs
  */
-export const getAIMetrics = async (req, res) => {
+async function saveDebugFile(filename, content) {
   try {
-    const metrics = getPerformanceMetrics();
-    const insights = getLearningInsights();
-
-    res.status(STATUS_CODES.SUCCESS).json({
-      success: true,
-      message: 'Metrics retrieved successfully',
-      data: {
-        metrics,
-        insights,
-      },
-    });
-  } catch (error) {
-    console.error('AI metrics error:', error);
-    res.status(STATUS_CODES.INTERNAL_ERROR).json({
-      success: false,
-      message: 'Error retrieving AI metrics',
-      error: error.message,
-    });
+    const outDir = path.join(process.cwd(), 'outputs');
+    await fs.mkdir(outDir, { recursive: true });
+    await fs.writeFile(path.join(outDir, filename), content, 'utf8');
+  } catch (err) {
+    console.error('Failed to write debug file:', err);
   }
-};
-
-/**
- * Process data with AI model
- */
-export const processAI = async (req, res) => {
-  try {
-    const { input, type } = req.body;
-
-    if (!input) {
-      return res.status(STATUS_CODES.BAD_REQUEST).json({
-        success: false,
-        message: 'Input data is required',
-      });
-    }
-
-    const result = await processWithAI(input, type);
-
-    res.status(STATUS_CODES.SUCCESS).json({
-      success: true,
-      message: 'AI processing completed',
-      data: result,
-    });
-  } catch (error) {
-    console.error('AI processing error:', error);
-    res.status(STATUS_CODES.INTERNAL_ERROR).json({
-      success: false,
-      message: 'Error processing AI request',
-      error: error.message,
-    });
-  }
-};
-
-/**
- * Analyze data using AI
- */
-export const analyze = async (req, res) => {
-  try {
-    const { data } = req.body;
-
-    if (!data) {
-      return res.status(STATUS_CODES.BAD_REQUEST).json({
-        success: false,
-        message: 'Data is required for analysis',
-      });
-    }
-
-    const analysis = await analyzeData(data);
-
-    res.status(STATUS_CODES.SUCCESS).json({
-      success: true,
-      message: 'Analysis completed',
-      data: analysis,
-    });
-  } catch (error) {
-    console.error('AI analysis error:', error);
-    res.status(STATUS_CODES.INTERNAL_ERROR).json({
-      success: false,
-      message: 'Error analyzing data',
-      error: error.message,
-    });
-  }
-};
-
-/**
- * Generate prediction using AI
- */
-export const predict = async (req, res) => {
-  try {
-    const { features } = req.body;
-
-    if (!features) {
-      return res.status(STATUS_CODES.BAD_REQUEST).json({
-        success: false,
-        message: 'Features are required for prediction',
-      });
-    }
-
-    const prediction = await generatePrediction(features);
-
-    res.status(STATUS_CODES.SUCCESS).json({
-      success: true,
-      message: 'Prediction generated',
-      data: prediction,
-    });
-  } catch (error) {
-    console.error('AI prediction error:', error);
-    res.status(STATUS_CODES.INTERNAL_ERROR).json({
-      success: false,
-      message: 'Error generating prediction',
-      error: error.message,
-    });
-  }
-};
-
-export default {
-  queryDatabase,
-  getAIMetrics,
-  processAI,
-  analyze,
-  predict,
-};
+}
